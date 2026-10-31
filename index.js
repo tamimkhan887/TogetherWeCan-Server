@@ -22,6 +22,11 @@ export async function connectToMongoDB() {
 const db = client.db("TogetherWeCan")
 const collecttion = db.collection("upcomingEvents")
 
+app.get("/upcomingevents" , async(req,res)=>{
+    const result = await db.collection("upcomingEvents").find().toArray()
+    res.send(result)
+})
+
 app.listen(port, () => {
     console.log(`Example app listening on port ${port}`)
 })
