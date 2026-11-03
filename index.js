@@ -192,7 +192,6 @@ app.post("/joinedevents", async (req, res) => {
   }
 });
 
-// Cancel / delete a joined event registration
 app.delete("/joinedevents/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -210,7 +209,27 @@ app.delete("/joinedevents/:id", async (req, res) => {
   }
 });
 
+app.get("/joinedevents/event/:eventId", async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const result = await joinedCollection.find({ eventId }).toArray();
+    res.send(result);
+  } catch (error) {
+    console.error("Error fetching event attendees:", error);
+    res.status(500).send({ message: error.message });
+  }
+});
 
+app.get("/joinedevents/:email", async (req, res) => {
+  try {
+    const { email } = req.params;
+    const result = await joinedCollection.find({ userEmail: email }).toArray();
+    res.send(result);
+  } catch (error) {
+    console.error("Error fetching joined events:", error);
+    res.status(500).send({ message: error.message });
+  }
+});
 
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
