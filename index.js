@@ -34,9 +34,29 @@ app.get("/", (req, res) => {
 });
 
 app.get("/upcomingevents", async (req, res) => {
-  const result = await eventsCollection.find().toArray();
+  const today = new Date().toISOString().split("T")[0];
+
+  const result = await eventsCollection
+    .find({
+      date: { $gte: today },
+    })
+    .sort({ date: 1 })
+    .toArray();
+
   res.send(result);
 });
+
+app.get("/pastevents", async (req, res) => {
+  const today = new Date().toISOString().split("T")[0];
+  const result = await eventsCollection
+    .find({
+      date: { $lt: today },
+    })
+    .sort({ date: 1 })
+    .toArray();
+
+  res.send(result);
+})
 app.post("/upcomingevents", async (req, res) => {
   const eventData = req.body;
   const result = await eventsCollection.insertOne(eventData)
