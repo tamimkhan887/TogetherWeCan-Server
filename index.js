@@ -46,6 +46,69 @@ app.get("/upcomingevents", async (req, res) => {
   res.send(result);
 });
 
+// Single event by ID or events by email (if param is an email address)
+app.get("/upcomingevents/:idOrEmail", async (req, res) => {
+  try {
+    const { idOrEmail } = req.params;
+
+    if (idOrEmail.includes("@") || !ObjectId.isValid(idOrEmail)) {
+      const today = new Date().toISOString().split("T")[0];
+      const result = await eventsCollection
+        .find({
+          organizerEmail: idOrEmail,
+          date: { $gte: today },
+        })
+        .sort({ date: 1 })
+        .toArray();
+      return res.send(result);
+    }
+
+    const query = { _id: new ObjectId(idOrEmail) };
+    const result = await eventsCollection.findOne(query);
+    if (!result) {
+      return res.status(404).send({ message: "Event not found" });
+    }
+    res.send(result);
+  } catch (error) {
+    console.error("Error fetching event:", error);
+    res.status(500).send({ message: error.message });
+  }
+});
+
+app.patch("/upcomingevents/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { _id, ...updatedData } = req.body;
+
+    if (updatedData.maxCapacity) {
+      updatedData.maxCapacity = Number(updatedData.maxCapacity);
+    }
+
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = {
+      $set: updatedData,
+    };
+
+    const result = await eventsCollection.updateOne(filter, updateDoc);
+    res.send(result);
+  } catch (error) {
+    console.error("Error updating event:", error);
+    res.status(500).send({ message: error.message });
+  }
+});
+
+app.delete("/upcomingevents/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const filter = { _id: new ObjectId(id) };
+    const result = await eventsCollection.deleteOne(filter);
+    res.send(result);
+  } catch (error) {
+    console.error("Error deleting event:", error);
+    res.status(500).send({ message: error.message });
+  }
+});
+
 app.get("/pastevents", async (req, res) => {
   const today = new Date().toISOString().split("T")[0];
   const result = await eventsCollection
@@ -56,29 +119,81 @@ app.get("/pastevents", async (req, res) => {
     .toArray();
 
   res.send(result);
-})
-
-app.get("/upcomingevents/:email", async (req, res) => {
-  const email = req.params.email;
-  const today = new Date().toISOString().split("T")[0];
-  const result = await eventsCollection
-    .find({
-      organizerEmail: email,
-      date: { $gte: today },
-    })
-    .sort({ date: 1 })
-    .toArray();
-  res.send(result);
 });
-
 
 app.post("/upcomingevents", async (req, res) => {
   const eventData = req.body;
-  const result = await eventsCollection.insertOne(eventData)
-  res.send(result)
+  const result = await eventsCollection.insertOne(eventData);
+  res.send(result);
+});
+
+// Join Event Endpoint
+app.post("/joinedevents", async (req, res) => {
+  try {
+    const joinData = req.body;
+    const { eventId, userEmail } = joinData;
+
+    if (!eventId || !userEmail) {
+      return res.status(400).send({ message: "eventId and userEmail are required!" });
+    }
+
+    // Check if event exists and if user is the organizer
+    let targetEvent = null;
+    if (ObjectId.isValid(eventId)) {
+      targetEvent = await eventsCollection.findOne({ _id: new ObjectId(eventId) });
+    }
+
+    if (targetEvent) {
+      const organizerEmail = targetEvent.organizerEmail || "";
+      if (organizerEmail.trim().toLowerCase() === userEmail.trim().toLowerCase()) {
+        return res.status(400).send({
+          message: "Organizers cannot join their own event as a volunteer!",
+        });
+      }
+    }
+
+    // Check if user already joined this event
+    const existing = await joinedCollection.findOne({
+      eventId: joinData.eventId,
+      userEmail: joinData.userEmail,
+    });
+
+    if (existing) {
+      return res.status(400).send({ message: "You have already joined this event!" });
+    }
+
+    // Enrich with event data if not already populated
+    const eventPayload = {
+      eventId: joinData.eventId,
+      userEmail: joinData.userEmail,
+      userName: joinData.userName || "Community Volunteer",
+      userAvatar: joinData.userAvatar || "",
+      eventTitle: joinData.eventTitle || targetEvent?.title || "Community Event",
+      eventDate: joinData.eventDate || targetEvent?.date || new Date().toISOString(),
+      eventLocation: joinData.eventLocation || targetEvent?.location || "TBD",
+      eventImage: joinData.eventImage || targetEvent?.image || "",
+      eventCategory: joinData.eventCategory || targetEvent?.category || "Other",
+      organizerName: joinData.organizerName || targetEvent?.organizerName || "Organizer",
+      organizerEmail: joinData.organizerEmail || targetEvent?.organizerEmail || "",
+      joinedAt: new Date().toISOString(),
+    };
+
+    const result = await joinedCollection.insertOne(eventPayload);
+
+    res.send({
+      success: true,
+      insertedId: result.insertedId,
+      message: "Successfully joined event!",
+      data: eventPayload,
+    });
+  } catch (error) {
+    console.error("Error joining event:", error);
+    res.status(500).send({ message: error.message });
+  }
 });
 
 
+
 app.listen(port, () => {
-  console.log(`Example app listening on port ${port}`)
-})
+  console.log(`Example app listening on port ${port}`);
+});
