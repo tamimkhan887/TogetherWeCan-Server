@@ -192,6 +192,24 @@ app.post("/joinedevents", async (req, res) => {
   }
 });
 
+// Cancel / delete a joined event registration
+app.delete("/joinedevents/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    let query = {};
+    if (ObjectId.isValid(id)) {
+      query = { _id: new ObjectId(id) };
+    } else {
+      query = { eventId: id };
+    }
+    const result = await joinedCollection.deleteOne(query);
+    res.send(result);
+  } catch (error) {
+    console.error("Error cancelling joined event:", error);
+    res.status(500).send({ message: error.message });
+  }
+});
+
 
 
 app.listen(port, () => {
