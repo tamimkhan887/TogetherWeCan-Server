@@ -57,6 +57,21 @@ app.get("/pastevents", async (req, res) => {
 
   res.send(result);
 })
+
+app.get("/upcomingevents/:email", async (req, res) => {
+  const email = req.params.email;
+  const today = new Date().toISOString().split("T")[0];
+  const result = await eventsCollection
+    .find({
+      organizerEmail: email,
+      date: { $gte: today },
+    })
+    .sort({ date: 1 })
+    .toArray();
+  res.send(result);
+});
+
+
 app.post("/upcomingevents", async (req, res) => {
   const eventData = req.body;
   const result = await eventsCollection.insertOne(eventData)
