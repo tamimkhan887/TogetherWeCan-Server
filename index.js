@@ -2,6 +2,7 @@ import express from "express";
 import { MongoClient, ObjectId } from "mongodb";
 import dotenv from "dotenv";
 import cors from "cors";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 dotenv.config();
 
@@ -10,6 +11,7 @@ const port = process.env.PORT || 8000;
 
 app.use(cors());
 app.use(express.json());
+
 
 const client = new MongoClient(process.env.MONGODB_URL);
 
@@ -40,13 +42,12 @@ app.get("/upcomingevents", async (req, res) => {
     .find({
       date: { $gte: today },
     })
-    .sort({ date: 1 })
+    .sort({ date: 1 }).limit(6)
     .toArray();
 
   res.send(result);
 });
 
-// Past events endpoint (events with date < today)
 app.get("/pastevents", async (req, res) => {
   try {
     const today = new Date().toISOString().split("T")[0];
@@ -65,11 +66,36 @@ app.get("/pastevents", async (req, res) => {
   }
 });
 
-// Single event by ID or events by email (if param is an email address)
-app.get("/upcomingevents/:idOrEmail", async (req, res) => {
+const verifytoken = async (req, res, next) => {
+  const authHeader = req.headers.authorization
+  if (!authHeader) {
+    return res.status(401).send({ message: "Unauthorized" });
+  }
+  const token = authHeader.split(" ")[1]
+  if (!token) {
+    return res.status(401).send({ message: "Unauthorized" });
+  }
+  const JWKS = createRemoteJWKSet(new URL(`${process.env.ForntEND_URL}/api/auth/jwks`))
+  try {
+    const { payload } = await jwtVerify(token, JWKS)
+    next()
+  } catch (error) {
+    return res.status(503).send({ message: "Service Unavailable" });
+  }
+}
+const verifyTokenForEmail = (req, res, next) => {
+  const { idOrEmail } = req.params;
+
+  if (idOrEmail.includes("@")) {
+    return verifytoken(req, res, next);
+  }
+
+  next();
+};
+
+app.get("/upcomingevents/:idOrEmail", verifyTokenForEmail, async (req, res) => {
   try {
     const { idOrEmail } = req.params;
-
     if (idOrEmail.includes("@") || !ObjectId.isValid(idOrEmail)) {
       const today = new Date().toISOString().split("T")[0];
       const result = await eventsCollection
@@ -140,7 +166,7 @@ app.get("/pastevents", async (req, res) => {
   res.send(result);
 });
 
-app.post("/upcomingevents", async (req, res) => {
+app.post("/upcomingevents", verifytoken, async (req, res) => {
   const eventData = req.body;
   const result = await eventsCollection.insertOne(eventData);
   res.send(result);
@@ -170,7 +196,6 @@ app.post("/joinedevents", async (req, res) => {
         });
       }
 
-      // Check if event is in the past
       if (targetEvent.date) {
         const today = new Date().toISOString().split("T")[0];
         if (targetEvent.date < today) {
@@ -181,7 +206,6 @@ app.post("/joinedevents", async (req, res) => {
       }
     }
 
-    // Check if user already joined this event
     const existing = await joinedCollection.findOne({
       eventId: joinData.eventId,
       userEmail: joinData.userEmail,
@@ -191,7 +215,6 @@ app.post("/joinedevents", async (req, res) => {
       return res.status(400).send({ message: "You have already joined this event!" });
     }
 
-    // Enrich with event data if not already populated
     const eventPayload = {
       eventId: joinData.eventId,
       userEmail: joinData.userEmail,
@@ -249,10 +272,13 @@ app.get("/joinedevents/event/:eventId", async (req, res) => {
   }
 });
 
-app.get("/joinedevents/:email", async (req, res) => {
+app.get("/joinedevents/:email", verifytoken, async (req, res) => {
   try {
     const { email } = req.params;
-    const result = await joinedCollection.find({ userEmail: email }).toArray();
+    const result = await joinedCollection
+      .find({ userEmail: email })
+      .sort({ eventDate: 1, joinedAt: -1 })
+      .toArray();
     res.send(result);
   } catch (error) {
     console.error("Error fetching joined events:", error);
