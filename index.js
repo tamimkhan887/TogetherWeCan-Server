@@ -13,39 +13,87 @@ app.use(cors());
 app.use(express.json());
 
 
-const client = new MongoClient(process.env.MONGODB_URL);
+let client = null;
+let clientPromise = null;
 
-export async function connectToMongoDB() {
+export async function getDb() {
+  const uri = process.env.MONGODB_URL;
+  if (!uri) {
+    throw new Error("MONGODB_URL environment variable is not defined");
+  }
+
+  const isConnected = client && client.topology && client.topology.s?.state === "connected";
+  if (!isConnected) {
+    client = new MongoClient(uri, {
+      serverSelectionTimeoutMS: 5000,
+    });
+    clientPromise = client.connect();
+  }
+
   try {
-    await client.connect();
-    console.log("You successfully connected to MongoDB!");
-    return client;
+    await clientPromise;
+    return client.db("TogetherWeCan");
   } catch (err) {
-    console.error("MongoDB connection error:", err);
+    client = null;
+    clientPromise = null;
+    throw err;
   }
 }
 
-connectToMongoDB();
+function getCollection(name) {
+  return new Proxy({}, {
+    get(target, prop) {
+      if (!client) {
+        throw new Error(`Database is not connected. Attempted to access collection '${name}.${String(prop)}'`);
+      }
+      const col = client.db("TogetherWeCan").collection(name);
+      const val = col[prop];
+      return typeof val === "function" ? val.bind(col) : val;
+    }
+  });
+}
 
-const db = client.db("TogetherWeCan");
-const eventsCollection = db.collection("upcomingEvents");
-const joinedCollection = db.collection("joinedEvents");
+const eventsCollection = getCollection("upcomingEvents");
+const joinedCollection = getCollection("joinedEvents");
+
+// Middleware to ensure DB is connected before handling any API routes
+app.use(async (req, res, next) => {
+  if (req.path === "/") {
+    return next();
+  }
+  try {
+    await getDb();
+    next();
+  } catch (error) {
+    console.error("Database connection failed:", error);
+    return res.status(500).json({
+      message: "Database connection failed",
+      error: error.message,
+    });
+  }
+});
 
 app.get("/", (req, res) => {
   res.send({ message: `Api Is Running` });
 });
 
 app.get("/upcomingevents", async (req, res) => {
-  const today = new Date().toISOString().split("T")[0];
+  try {
+    const today = new Date().toISOString().split("T")[0];
 
-  const result = await eventsCollection
-    .find({
-      date: { $gte: today },
-    })
-    .sort({ date: 1 }).limit(6)
-    .toArray();
+    const result = await eventsCollection
+      .find({
+        date: { $gte: today },
+      })
+      .sort({ date: 1 })
+      .limit(6)
+      .toArray();
 
-  res.send(result);
+    res.send(result);
+  } catch (error) {
+    console.error("Error fetching upcoming events:", error);
+    res.status(500).send({ message: error.message });
+  }
 });
 
 app.get("/pastevents", async (req, res) => {
@@ -67,22 +115,27 @@ app.get("/pastevents", async (req, res) => {
 });
 
 const verifytoken = async (req, res, next) => {
-  const authHeader = req.headers.authorization
+  const authHeader = req.headers.authorization;
   if (!authHeader) {
     return res.status(401).send({ message: "Unauthorized" });
   }
-  const token = authHeader.split(" ")[1]
+  const token = authHeader.split(" ")[1];
   if (!token) {
     return res.status(401).send({ message: "Unauthorized" });
   }
-  const JWKS = createRemoteJWKSet(new URL(`${process.env.ForntEND_URL}/api/auth/jwks`))
-  try {
-    const { payload } = await jwtVerify(token, JWKS)
-    next()
-  } catch (error) {
-    return res.status(503).send({ message: "Service Unavailable" });
+  if (!process.env.ForntEND_URL) {
+    return res.status(500).send({ message: "ForntEND_URL environment variable is not configured" });
   }
-}
+  try {
+    const JWKS = createRemoteJWKSet(new URL(`${process.env.ForntEND_URL}/api/auth/jwks`));
+    const { payload } = await jwtVerify(token, JWKS);
+    req.user = payload;
+    next();
+  } catch (error) {
+    console.error("JWT verification error:", error);
+    return res.status(401).send({ message: "Unauthorized: Invalid token" });
+  }
+};
 const verifyTokenForEmail = (req, res, next) => {
   const { idOrEmail } = req.params;
 
@@ -154,22 +207,15 @@ app.delete("/upcomingevents/:id", async (req, res) => {
   }
 });
 
-app.get("/pastevents", async (req, res) => {
-  const today = new Date().toISOString().split("T")[0];
-  const result = await eventsCollection
-    .find({
-      date: { $lt: today },
-    })
-    .sort({ date: 1 })
-    .toArray();
-
-  res.send(result);
-});
-
 app.post("/upcomingevents", verifytoken, async (req, res) => {
-  const eventData = req.body;
-  const result = await eventsCollection.insertOne(eventData);
-  res.send(result);
+  try {
+    const eventData = req.body;
+    const result = await eventsCollection.insertOne(eventData);
+    res.send(result);
+  } catch (error) {
+    console.error("Error creating event:", error);
+    res.status(500).send({ message: error.message });
+  }
 });
 
 // Join Event Endpoint
