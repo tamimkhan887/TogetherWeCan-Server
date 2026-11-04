@@ -46,6 +46,25 @@ app.get("/upcomingevents", async (req, res) => {
   res.send(result);
 });
 
+// Past events endpoint (events with date < today)
+app.get("/pastevents", async (req, res) => {
+  try {
+    const today = new Date().toISOString().split("T")[0];
+
+    const result = await eventsCollection
+      .find({
+        date: { $lt: today },
+      })
+      .sort({ date: -1 })
+      .toArray();
+
+    res.send(result);
+  } catch (error) {
+    console.error("Error fetching past events:", error);
+    res.status(500).send({ message: error.message });
+  }
+});
+
 // Single event by ID or events by email (if param is an email address)
 app.get("/upcomingevents/:idOrEmail", async (req, res) => {
   try {
@@ -149,6 +168,16 @@ app.post("/joinedevents", async (req, res) => {
         return res.status(400).send({
           message: "Organizers cannot join their own event as a volunteer!",
         });
+      }
+
+      // Check if event is in the past
+      if (targetEvent.date) {
+        const today = new Date().toISOString().split("T")[0];
+        if (targetEvent.date < today) {
+          return res.status(400).send({
+            message: "Registrations are closed because this event has already concluded!",
+          });
+        }
       }
     }
 
