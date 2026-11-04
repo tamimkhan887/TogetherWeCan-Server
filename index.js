@@ -75,7 +75,7 @@ app.use(async (req, res, next) => {
 });
 
 app.get("/", (req, res) => {
-  res.send({ message: `Api Is Running` });
+  res.send({ message: `Api Is Running`, version: "v2-db-jwks" });
 });
 
 app.get("/upcomingevents", async (req, res) => {
