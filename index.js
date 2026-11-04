@@ -2,7 +2,7 @@ import express from "express";
 import { MongoClient, ObjectId } from "mongodb";
 import dotenv from "dotenv";
 import cors from "cors";
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet, jwtVerify, importJWK } from "jose";
 
 dotenv.config();
 
@@ -55,6 +55,7 @@ function getCollection(name) {
 
 const eventsCollection = getCollection("upcomingEvents");
 const joinedCollection = getCollection("joinedEvents");
+const jwksCollection = getCollection("jwks");
 
 // Middleware to ensure DB is connected before handling any API routes
 app.use(async (req, res, next) => {
@@ -117,24 +118,63 @@ app.get("/pastevents", async (req, res) => {
 const verifytoken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) {
-    return res.status(401).send({ message: "Unauthorized" });
+    return res.status(401).send({ message: "Unauthorized: Missing authorization header" });
   }
   const token = authHeader.split(" ")[1];
-  if (!token) {
-    return res.status(401).send({ message: "Unauthorized" });
+  if (!token || token === "undefined" || token === "null") {
+    return res.status(401).send({ message: "Unauthorized: Missing token" });
   }
-  if (!process.env.ForntEND_URL) {
-    return res.status(500).send({ message: "ForntEND_URL environment variable is not configured" });
-  }
+
+  // 1. Direct DB verification via jwks collection in MongoDB (fastest & most reliable)
   try {
-    const JWKS = createRemoteJWKSet(new URL(`${process.env.ForntEND_URL}/api/auth/jwks`));
-    const { payload } = await jwtVerify(token, JWKS);
-    req.user = payload;
-    next();
-  } catch (error) {
-    console.error("JWT verification error:", error);
-    return res.status(401).send({ message: "Unauthorized: Invalid token" });
+    const jwkDocs = await jwksCollection.find({}).toArray();
+    for (const doc of jwkDocs) {
+      try {
+        const rawKey = typeof doc.publicKey === "string" ? JSON.parse(doc.publicKey) : doc.publicKey;
+        const key = await importJWK({ ...rawKey, alg: doc.alg || "EdDSA" }, doc.alg || "EdDSA");
+        const { payload } = await jwtVerify(token, key);
+        req.user = payload;
+        return next();
+      } catch {}
+    }
+  } catch (dbErr) {
+    console.error("DB JWKS lookup error:", dbErr.message);
   }
+
+  // 2. Fallback to remote JWKS endpoints
+  const candidateUrls = [];
+  const envFrontend = process.env.FRONTEND_URL || process.env.ForntEND_URL;
+  if (envFrontend) {
+    candidateUrls.push(envFrontend.replace(/\/$/, ""));
+  }
+
+  const origin = req.headers.origin || req.headers.referer;
+  if (origin) {
+    try {
+      const parsed = new URL(origin);
+      candidateUrls.push(`${parsed.protocol}//${parsed.host}`);
+    } catch {}
+  }
+
+  candidateUrls.push("https://together-we-can-seven.vercel.app");
+  candidateUrls.push("http://localhost:3000");
+
+  const uniqueUrls = [...new Set(candidateUrls)];
+
+  let lastError = null;
+  for (const baseUrl of uniqueUrls) {
+    try {
+      const JWKS = createRemoteJWKSet(new URL(`${baseUrl}/api/auth/jwks`));
+      const { payload } = await jwtVerify(token, JWKS);
+      req.user = payload;
+      return next();
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  console.error("JWT verification failed across candidate origins:", lastError?.message || lastError);
+  return res.status(401).send({ message: "Unauthorized: Invalid token" });
 };
 const verifyTokenForEmail = (req, res, next) => {
   const { idOrEmail } = req.params;
